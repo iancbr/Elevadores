@@ -1,6 +1,5 @@
 #include "timer.h"
 #include <pthread.h>
-#include <semaphore.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
@@ -54,7 +53,6 @@ typedef struct {
 
 Request floor_buffers[MAX_FLOORS][MAX_REQUESTS];
 int request_counts[MAX_FLOORS] = {0};
-sem_t floor_semaphores[MAX_FLOORS];
 pthread_mutex_t floor_mutexes[MAX_FLOORS];
 int passenger_counter = 0;
 int total_requests = 0;
@@ -195,7 +193,6 @@ int main() {
   double inicio, fim, delta;
 
   for (int i = 0; i < MAX_FLOORS; i++) {
-    sem_init(&floor_semaphores[i], 0, 0);
     pthread_mutex_init(&floor_mutexes[i], NULL);
   }
 
@@ -217,7 +214,6 @@ int main() {
 
   for (int i = 0; i < MAX_FLOORS; i++) {
     pthread_mutex_destroy(&floor_mutexes[i]);
-    sem_destroy(&floor_semaphores[i]);
   }
 
   printf("%sTodos os elevadores finalizaram suas requisições.%s\n", CYAN,
