@@ -6,9 +6,9 @@
 #include <time.h>
 #include <unistd.h>
 
-#define MAX_REQUESTS 3
-#define MAX_ELEVATORS 2
-#define MAX_FLOORS 10
+#define MAX_REQUESTS 7
+#define MAX_ELEVATORS 3
+#define MAX_FLOORS 50
 #define MAX_PASSENGERS 4
 
 // Códigos ANSI para cores
@@ -86,7 +86,7 @@ void *elevator(void *arg) {
         }
         passenger_count--;
         i--;
-        sleep(1); // Tempo para desembarque
+        sleep(4); // Tempo para desembarque
       }
     }
 
@@ -113,7 +113,7 @@ void *elevator(void *arg) {
         request_counts[current_floor]--;
         i--;
         no_requests = 0; // Ainda existem requisições ativas
-        sleep(1);
+        sleep(4);
       }
     }
     pthread_mutex_unlock(&floor_mutexes[current_floor]);
