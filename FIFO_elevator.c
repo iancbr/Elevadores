@@ -6,68 +6,72 @@
 
 #define MAX_REQUESTS 10
 #define MAX_ELEVATORS 2
+#define MAX_FLOORS 10
 
 typedef struct {
   int from_floor;
   int to_floor;
+  int passenger_id;
 } Request;
 
 Request request_queue[MAX_REQUESTS];
 int request_count = 0;
+int passenger_counter = 0;
 pthread_mutex_t queue_mutex = PTHREAD_MUTEX_INITIALIZER;
-pthread_cond_t request_available = PTHREAD_COND_INITIALIZER;
+pthread_cond_t requests_ready = PTHREAD_COND_INITIALIZER;
 
-sem_t elevator_ready; // Semáforo para controlar o início dos elevadores
-
-void move_elevator(int *current_floor, int target_floor, int elevator_id) {
-  while (*current_floor != target_floor) {
-    if (*current_floor < target_floor) {
-      (*current_floor)++;
-    } else {
-      (*current_floor)--;
-    }
-
-    if (*current_floor == target_floor) {
-      printf("Elevador %d: Chegou ao andar %d\n", elevator_id, *current_floor);
-    } else {
-      printf("Elevador %d: Passando pelo andar %d\n", elevator_id,
-             *current_floor);
-    }
-
-    sleep(1); // Simula o tempo de movimento
-  }
-}
+int inputs_completed = 0; // Indica que todas as requisições foram inseridas
 
 void *elevator(void *id) {
   int elevator_id = *((int *)id);
   int current_floor = 0;
 
-  // Espera pelo semáforo ser liberado para começar a processar as requisições
-  sem_wait(&elevator_ready);
-
   while (1) {
     pthread_mutex_lock(&queue_mutex);
 
-    while (request_count == 0) {
-      pthread_cond_wait(&request_available,
-                        &queue_mutex); // Espera por requisição
+    // Espera até que haja requisições ou que todas as entradas tenham terminado
+    while (request_count == 0 && !inputs_completed) {
+      pthread_cond_wait(&requests_ready, &queue_mutex);
     }
 
-    Request req = request_queue[0]; // FIFO: Pega a primeira requisição
-    for (int i = 0; i < request_count - 1; i++) {
-      request_queue[i] = request_queue[i + 1]; // Move fila para a esquerda
+    // Se não há mais requisições e entradas foram concluídas, encerrar
+    if (request_count == 0 && inputs_completed) {
+      pthread_mutex_unlock(&queue_mutex);
+      break;
     }
-    request_count--;
+
+    // Processa a primeira requisição na fila (FIFO)
+    Request req = request_queue[0];
+    for (int i = 0; i < request_count - 1; i++) {
+      request_queue[i] =
+          request_queue[i + 1]; // Desloca as requisições para frente
+    }
+    request_count--; // Decrementa a contagem de requisições
 
     pthread_mutex_unlock(&queue_mutex);
 
-    printf("Elevador %d: Movendo do andar %d para o andar %d\n", elevator_id,
-           current_floor, req.from_floor);
-    move_elevator(&current_floor, req.from_floor, elevator_id);
+    // Movimentar até o andar de origem
+    while (current_floor != req.from_floor) {
+      current_floor += (current_floor < req.from_floor) ? 1 : -1;
+      printf("Elevador %d: No andar %d\n", elevator_id, current_floor);
+      sleep(1); // Simula tempo de movimentação
+    }
 
-    printf("Elevador %d: Movendo do andar %d para o andar %d\n", elevator_id,
-           current_floor, req.to_floor);
-    move_elevator(&current_floor, req.to_floor, elevator_id);
+    printf("Elevador %d: Passageiro %d entrou no elevador no andar %d com "
+           "destino ao andar %d\n",
+           elevator_id, req.passenger_id, req.from_floor, req.to_floor);
+    sleep(4);
+
+    // Movimentar até o andar de destino
+    while (current_floor != req.to_floor) {
+      current_floor += (current_floor < req.to_floor) ? 1 : -1;
+      printf("Elevador %d: No andar %d\n", elevator_id, current_floor);
+      sleep(1); // Simula tempo de movimentação
+    }
+
+    printf("Elevador %d: Passageiro %d desembarcou no andar %d\n", elevator_id,
+           req.passenger_id, req.to_floor);
+    sleep(4);
   }
 
   return NULL;
@@ -76,10 +80,10 @@ void *elevator(void *id) {
 void make_request(int from, int to) {
   pthread_mutex_lock(&queue_mutex);
   if (request_count < MAX_REQUESTS) {
-    Request req = {from, to};
+    Request req = {from, to, ++passenger_counter};
     request_queue[request_count++] = req;
-    printf("Requisição: Do andar %d para o andar %d\n", from, to);
-    pthread_cond_signal(&request_available); // Notifica os elevadores
+    printf("Requisição: Passageiro %d solicitou do andar %d para o andar %d\n",
+           req.passenger_id, from, to);
   } else {
     printf("Fila de requisições cheia!\n");
   }
@@ -90,77 +94,40 @@ int main() {
   pthread_t elevators[MAX_ELEVATORS];
   int elevator_ids[MAX_ELEVATORS];
 
-  // Inicializa o semáforo com 0, para que os elevadores fiquem bloqueados até
-  // liberar
-  sem_init(&elevator_ready, 0, 0);
-
-  // Cria as threads dos elevadores
   for (int i = 0; i < MAX_ELEVATORS; i++) {
     elevator_ids[i] = i + 1;
     pthread_create(&elevators[i], NULL, elevator, &elevator_ids[i]);
   }
 
-  // Entrada de requisições: escolha quantas e quais
   int num_requests;
-  while (1) {
-    printf("Quantas requisições você deseja fazer? (Máximo %d): ",
-           MAX_REQUESTS);
-    if (scanf("%d", &num_requests) != 1 || num_requests <= 0 ||
-        num_requests > MAX_REQUESTS) {
-      printf("Número de requisições inválido. Tente novamente.\n");
-      while (getchar() != '\n')
-        ; // Limpa o buffer
-      continue;
-    }
-
-    // Loop para ler as requisições do usuário
-    for (int i = 0; i < num_requests; i++) {
-      int from, to;
-      printf("Digite a %dª requisição no formato 'origem,destino': ", i + 1);
-      while (getchar() != '\n')
-        ; // Limpa o buffer de novas linhas
-
-      if (scanf("%d,%d", &from, &to) != 2) {
-        printf("Erro na leitura da requisição. Tente novamente.\n");
-        break;
-      }
-
-      if (from == to) {
-        printf("O andar de origem não pode ser o mesmo que o destino.\n");
-      } else if (from > 0 && to > 0) {
-        make_request(from, to);
-      } else {
-        printf("Os andares devem ser positivos.\n");
-      }
-
-      // Se o número máximo de requisições for atingido, sai do loop
-      if (request_count >= MAX_REQUESTS) {
-        printf("Limite de requisições atingido.\n");
-        break;
-      }
-    }
-
-    // Pergunta se o usuário quer adicionar mais requisições
-    char choice;
-    printf("Deseja adicionar mais requisições? (s/n): ");
-    while (getchar() != '\n')
-      ; // Limpa o buffer
-    choice = getchar();
-    if (choice != 's' && choice != 'S') {
-      break;
-    }
+  printf("Quantas requisições você deseja fazer? (Máximo %d): ", MAX_REQUESTS);
+  if (scanf("%d", &num_requests) != 1) {
+    fprintf(stderr, "Erro ao ler o número de requisições.\n");
+    return 1;
   }
 
-  // Libera o semáforo para os elevadores começarem a processar as requisições
-  sem_post(&elevator_ready);
+  for (int i = 0; i < num_requests; i++) {
+    int from, to;
+    printf("Digite a %dª requisição no formato 'origem,destino': ", i + 1);
+    if (scanf("%d,%d", &from, &to) != 2) {
+      fprintf(stderr, "Erro ao ler a requisição %d.\n", i + 1);
+      return 1;
+    }
+    make_request(from, to);
+  }
 
-  // Junta as threads (nunca vai parar nesse exemplo simplificado)
+  pthread_mutex_lock(&queue_mutex);
+  inputs_completed = 1; // Marca que todas as entradas foram finalizadas
+  pthread_cond_broadcast(&requests_ready); // Acorda os elevadores
+  pthread_mutex_unlock(&queue_mutex);
+
+  // Espera todos os elevadores terminarem suas tarefas
   for (int i = 0; i < MAX_ELEVATORS; i++) {
     pthread_join(elevators[i], NULL);
   }
 
-  // Destroi o semáforo
-  sem_destroy(&elevator_ready);
+  // Mensagem final após o término de todas as requisições
+  printf("Todos os elevadores finalizaram suas requisições.\n");
 
   return 0;
 }
