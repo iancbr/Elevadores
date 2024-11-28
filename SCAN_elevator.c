@@ -2,138 +2,164 @@
 #include <semaphore.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
 #include <unistd.h>
 
-#define MAX_REQUESTS 10
-#define MAX_ELEVATORS 2
+#define MAX_REQUESTS 3
+#define MAX_ELEVATORS 1
 #define MAX_FLOORS 10
+#define MAX_PASSENGERS 4
 
 typedef struct {
-  int from_floor;
   int to_floor;
+  int passenger_id;
 } Request;
 
-Request request_queue[MAX_REQUESTS];
-int request_count = 0;
-pthread_mutex_t queue_mutex = PTHREAD_MUTEX_INITIALIZER;
-pthread_cond_t request_available = PTHREAD_COND_INITIALIZER;
+Request floor_buffers[MAX_FLOORS][MAX_REQUESTS];
+int request_counts[MAX_FLOORS] = {0};
+sem_t floor_semaphores[MAX_FLOORS];
+pthread_mutex_t floor_mutexes[MAX_FLOORS];
+int passenger_counter = 0;
+int total_requests = 0; // Contador global de requisições geradas
 
-void *elevator(void *id) {
-  int elevator_id = *((int *)id);
+void *elevator(void *arg) {
+  int elevator_id = *((int *)arg);
   int current_floor = 0;
   int direction = 1; // 1 = subindo, -1 = descendo
+  Request passengers[MAX_PASSENGERS];
+  int passenger_count = 0;
 
   while (1) {
-    pthread_mutex_lock(&queue_mutex);
+    // Mostrar posição atual
+    printf("Elevador %d: No andar %d\n", elevator_id, current_floor);
 
-    while (request_count == 0) {
-      pthread_cond_wait(&request_available,
-                        &queue_mutex); // Espera por requisição
-    }
-
-    // Seleciona a requisição mais próxima na direção atual
-    int selected_index = -1;
-    for (int i = 0; i < request_count; i++) {
-      if ((direction == 1 && request_queue[i].from_floor >= current_floor) ||
-          (direction == -1 && request_queue[i].from_floor <= current_floor)) {
-        if (selected_index == -1 ||
-            abs(request_queue[i].from_floor - current_floor) <
-                abs(request_queue[selected_index].from_floor - current_floor)) {
-          selected_index = i;
+    // Desembarcar passageiros no andar atual
+    for (int i = 0; i < passenger_count; i++) {
+      if (passengers[i].to_floor == current_floor) {
+        printf("Elevador %d: Passageiro %d desembarcou no andar %d\n",
+               elevator_id, passengers[i].passenger_id, current_floor);
+        for (int j = i; j < passenger_count - 1; j++) {
+          passengers[j] = passengers[j + 1];
         }
+        passenger_count--;
+        i--;
+        sleep(1); // Tempo para desembarque
       }
     }
 
-    // Se não há requisição na direção atual, inverte direção
-    if (selected_index == -1) {
-      direction *= -1;
-      pthread_mutex_unlock(&queue_mutex);
-      continue;
+    // Embarcar passageiros no andar atual (se estiverem indo na mesma direção)
+    pthread_mutex_lock(&floor_mutexes[current_floor]);
+    for (int i = 0; i < request_counts[current_floor]; i++) {
+      if (passenger_count < MAX_PASSENGERS &&
+          ((direction == 1 &&
+            floor_buffers[current_floor][i].to_floor > current_floor) ||
+           (direction == -1 &&
+            floor_buffers[current_floor][i].to_floor < current_floor))) {
+        passengers[passenger_count++] = floor_buffers[current_floor][i];
+        printf("Elevador %d: Passageiro %d entrou no elevador no andar %d com "
+               "destino ao andar %d\n",
+               elevator_id, floor_buffers[current_floor][i].passenger_id,
+               current_floor, floor_buffers[current_floor][i].to_floor);
+
+        // Remover requisição atendida
+        for (int j = i; j < request_counts[current_floor] - 1; j++) {
+          floor_buffers[current_floor][j] = floor_buffers[current_floor][j + 1];
+        }
+        request_counts[current_floor]--;
+        i--;
+        sleep(1); // Tempo para embarque
+      }
+    }
+    pthread_mutex_unlock(&floor_mutexes[current_floor]);
+
+    // Verificar se ainda há requisições na direção atual
+    int has_requests_in_direction = 0;
+    for (int i = current_floor + direction; i >= 0 && i < MAX_FLOORS;
+         i += direction) {
+      if (request_counts[i] > 0 || // Requisições de embarque
+          (passenger_count > 0 &&  // Passageiros precisam desembarcar
+           ((direction == 1 && i > current_floor) ||
+            (direction == -1 && i < current_floor)))) {
+        has_requests_in_direction = 1;
+        break;
+      }
     }
 
-    Request req = request_queue[selected_index];
-    for (int i = selected_index; i < request_count - 1; i++) {
-      request_queue[i] =
-          request_queue[i + 1]; // Remove a requisição selecionada
-    }
-    request_count--;
-
-    pthread_mutex_unlock(&queue_mutex);
-
-    // Move para o andar de origem
-    printf("Elevador %d: Movendo do andar %d para o andar %d\n", elevator_id,
-           current_floor, req.from_floor);
-    while (current_floor != req.from_floor) {
-      if (current_floor < req.from_floor) {
-        current_floor++;
-      } else {
-        current_floor--;
-      }
-
-      if (current_floor == req.from_floor) {
-        printf("Elevador %d: Chegou ao andar %d\n", elevator_id, current_floor);
-      } else {
-        printf("Elevador %d: Passando pelo andar %d\n", elevator_id,
-               current_floor);
-      }
-      sleep(1); // Simula o tempo de movimento
+    // Mudar direção se necessário
+    if (!has_requests_in_direction) {
+      direction = -direction; // Inverter direção
+      printf("Elevador %d: Mudando direção para %s\n", elevator_id,
+             direction == 1 ? "subindo" : "descendo");
+    } else {
+      // Movimentar elevador na direção atual
+      current_floor += direction;
     }
 
-    // Move para o andar de destino
-    printf("Elevador %d: Movendo do andar %d para o andar %d\n", elevator_id,
-           current_floor, req.to_floor);
-    while (current_floor != req.to_floor) {
-      if (current_floor < req.to_floor) {
-        current_floor++;
-      } else {
-        current_floor--;
-      }
-
-      if (current_floor == req.to_floor) {
-        printf("Elevador %d: Chegou ao andar %d\n", elevator_id, current_floor);
-      } else {
-        printf("Elevador %d: Passando pelo andar %d\n", elevator_id,
-               current_floor);
-      }
-      sleep(1); // Simula o tempo de movimento
-    }
+    sleep(1); // Simula o tempo para se mover entre andares
   }
 
   return NULL;
 }
 
-void make_request(int from, int to) {
-  pthread_mutex_lock(&queue_mutex);
-  if (request_count < MAX_REQUESTS) {
-    Request req = {from, to};
-    request_queue[request_count++] = req;
-    printf("Requisição: Do andar %d para o andar %d\n", from, to);
-    pthread_cond_signal(&request_available); // Notifica os elevadores
-  } else {
-    printf("Fila de requisições cheia!\n");
+void make_request() {
+  if (total_requests >= MAX_REQUESTS) {
+    return; // Não gera mais requisições após atingir o limite
   }
-  pthread_mutex_unlock(&queue_mutex);
+
+  int from = rand() % MAX_FLOORS;
+  int to = rand() % MAX_FLOORS;
+  while (to == from) {
+    to = rand() % MAX_FLOORS;
+  }
+
+  Request req = {to, ++passenger_counter};
+  pthread_mutex_lock(&floor_mutexes[from]);
+  if (request_counts[from] < MAX_REQUESTS) {
+    floor_buffers[from][request_counts[from]++] = req;
+    printf("Requisição: Passageiro %d solicitou do andar %d para o andar %d\n",
+           req.passenger_id, from, to);
+    total_requests++; // Incrementa o contador global de requisições
+  } else {
+    printf("Requisição: Passageiro %d não pôde ser adicionada ao andar %d "
+           "(fila cheia)\n",
+           req.passenger_id, from);
+  }
+  pthread_mutex_unlock(&floor_mutexes[from]);
 }
 
 int main() {
   pthread_t elevators[MAX_ELEVATORS];
   int elevator_ids[MAX_ELEVATORS];
 
-  // Cria as threads dos elevadores
+  // Inicializa mutexes e semáforos
+  for (int i = 0; i < MAX_FLOORS; i++) {
+    sem_init(&floor_semaphores[i], 0, 0);
+    pthread_mutex_init(&floor_mutexes[i], NULL);
+  }
+
+  // Cria threads para os elevadores
   for (int i = 0; i < MAX_ELEVATORS; i++) {
     elevator_ids[i] = i + 1;
     pthread_create(&elevators[i], NULL, elevator, &elevator_ids[i]);
   }
 
-  // Cria algumas requisições
-  make_request(1, 5);
-  make_request(3, 7);
-  make_request(2, 4);
-  make_request(6, 8);
+  srand(time(NULL));
 
-  // Junta as threads (nunca vai parar nesse exemplo simplificado)
+  // Gera requisições até atingir o limite
+  while (total_requests < MAX_REQUESTS) {
+    make_request();
+    sleep(rand() % 4 + 1); // Intervalo entre 1 e 4 segundos
+  }
+
+  // Aguarda as threads dos elevadores (nunca alcançado neste exemplo)
   for (int i = 0; i < MAX_ELEVATORS; i++) {
     pthread_join(elevators[i], NULL);
+  }
+
+  // Destrói mutexes e semáforos
+  for (int i = 0; i < MAX_FLOORS; i++) {
+    pthread_mutex_destroy(&floor_mutexes[i]);
+    sem_destroy(&floor_semaphores[i]);
   }
 
   return 0;
