@@ -2,9 +2,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include "timer.h"
 
-#define MAX_REQUESTS 10
-#define MAX_ELEVATORS 2
+#define MAX_REQUESTS 5
+#define MAX_ELEVATORS 3
 #define MAX_FLOORS 10
 
 typedef struct {
@@ -92,12 +93,14 @@ void make_request(int from, int to) {
 int main() {
   pthread_t elevators[MAX_ELEVATORS];
   int elevator_ids[MAX_ELEVATORS];
+  double inicio, fim, delta;
 
   for (int i = 0; i < MAX_ELEVATORS; i++) {
     elevator_ids[i] = i + 1;
     pthread_create(&elevators[i], NULL, elevator, &elevator_ids[i]);
   }
 
+  GET_TIME(inicio);
   int num_requests;
   printf("Quantas requisições você deseja fazer? (Máximo %d): ", MAX_REQUESTS);
   if (scanf("%d", &num_requests) != 1) {
@@ -127,6 +130,11 @@ int main() {
 
   // Mensagem final após o término de todas as requisições
   printf("Todos os elevadores finalizaram suas requisições.\n");
+
+  GET_TIME(fim);
+  delta = fim - inicio;
+  printf("tempo do processo com %d elevadores, %d requisições: %f segundos\n",
+         MAX_ELEVATORS, num_requests, delta);
 
   return 0;
 }
